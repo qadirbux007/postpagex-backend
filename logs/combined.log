@@ -1,0 +1,12 @@
+2026-04-07T14:29:47.253Z [[32minfo[39m]: PostPageX API running on port 4000 {
+  "env": "development",
+  "frontend": "http://localhost:3000"
+}
+2026-04-07T14:47:23.318Z [[32minfo[39m]: PostPageX API running on port 4000 {
+  "env": "development",
+  "frontend": "http://localhost:3000"
+}
+2026-04-07T15:02:55.761Z [[32minfo[39m]: PostPageX API running on port 4000 {
+  "env": "development",
+  "frontend": "http://127.0.0.1:5500"
+}
