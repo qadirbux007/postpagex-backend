@@ -14,3 +14,4 @@
   "env": "development",
   "frontend": "http://127.0.0.1:5500"
 }
+{"env":"production","frontend":"https://postpagex1.vercel.app/","level":"info","message":"PostPageX API running on port 4000","timestamp":"2026-04-08T18:31:14.263Z"}

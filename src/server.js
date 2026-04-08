@@ -15,24 +15,25 @@ const PgSession = ConnectPgSimple(session);
 
 // ── SECURITY MIDDLEWARE ───────────────────────────────────
 app.use(helmet({
-  crossOriginEmbedderPolicy: false, // needed for Facebook SDK
+  crossOriginEmbedderPolicy: false,
 }));
 
+// ✅ FIXED CORS (Vercel connected)
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: 'https://postpagex1.vercel.app',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
 
 // ── RATE LIMITING ─────────────────────────────────────────
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 20,
   message: { error: 'Too many attempts, please try again in 15 minutes' },
 });
 
 const apiLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
+  windowMs: 60 * 1000,
   max: 100,
   message: { error: 'Too many requests, please slow down' },
 });
@@ -42,23 +43,27 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// ── SESSIONS (for OAuth state) ────────────────────────────
+// ── SESSIONS (FIXED FOR CROSS-DOMAIN) ─────────────────────
 app.use(session({
-  store: new PgSession({ pool, tableName: 'session' }),
-  secret: process.env.SESSION_SECRET,
+  store: new PgSession({
+    pool,
+    tableName: 'session',
+  }),
+  secret: process.env.SESSION_SECRET || 'supersecret',
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production',
+    secure: true,          // ✅ required for HTTPS (Railway + Vercel)
     httpOnly: true,
-    maxAge: 30 * 60 * 1000, // 30 minutes (just for OAuth flow)
+    sameSite: 'none',      // ✅ VERY IMPORTANT for cross-domain
+    maxAge: 30 * 60 * 1000,
   },
 }));
 
 app.use(passport.initialize());
 app.use(passport.session());
 
-// ── STATIC FILES (uploads) ────────────────────────────────
+// ── STATIC FILES ──────────────────────────────────────────
 app.use('/uploads', express.static(process.env.UPLOAD_DIR || './uploads'));
 
 // ── HEALTH CHECK ──────────────────────────────────────────
@@ -91,7 +96,6 @@ app.use((err, req, res, next) => {
     method: req.method,
   });
 
-  // Don't leak stack traces in production
   const message = process.env.NODE_ENV === 'production'
     ? 'An unexpected error occurred'
     : err.message;
@@ -104,7 +108,7 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   logger.info(`PostPageX API running on port ${PORT}`, {
     env: process.env.NODE_ENV,
-    frontend: process.env.FRONTEND_URL,
+    frontend: 'https://postpagex1.vercel.app',
   });
 });
 
