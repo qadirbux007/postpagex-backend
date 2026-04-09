@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const { requireAuth } = require('../middleware/auth');
 const fb = require('../services/facebook');
 const { query } = require('../../config/database');
@@ -10,10 +11,16 @@ const logger = require('../../config/logger');
 // ── STEP 1: Start Facebook OAuth ─────────────────────────
 // Frontend calls this to get the redirect URL
 router.get('/connect', requireAuth, (req, res) => {
-  // Generate CSRF state token and store in session
-  const state = crypto.randomBytes(16).toString('hex');
-  req.session.fbOAuthState = state;
-  req.session.fbOAuthUserId = req.user.id;
+  // Encode userId + random nonce directly in the state JWT
+  // No session needed — the state is self-contained and signed
+  const state = jwt.sign(
+    {
+      userId: req.user.id,
+      nonce: crypto.randomBytes(16).toString('hex'),
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: '15m' }
+  );
 
   const oauthUrl = fb.getOAuthUrl(state);
   res.json({ url: oauthUrl });
@@ -25,18 +32,36 @@ router.get('/callback', async (req, res) => {
 
   if (error) {
     logger.warn('Facebook OAuth denied by user', { error });
-    return res.redirect(`${process.env.FRONTEND_URL}/dashboard.html?fb_error=denied`);
+    return res.redirect(
+      `${process.env.FRONTEND_URL}/dashboard.html?fb_error=denied`
+    );
   }
 
-  // Verify CSRF state
-  if (!state || state !== req.session.fbOAuthState) {
-    logger.warn('Facebook OAuth state mismatch — possible CSRF');
-    return res.redirect(`${process.env.FRONTEND_URL}/dashboard.html?fb_error=state_mismatch`);
+  if (!state) {
+    logger.warn('Facebook OAuth missing state parameter');
+    return res.redirect(
+      `${process.env.FRONTEND_URL}/dashboard.html?fb_error=state_mismatch`
+    );
   }
 
-  const userId = req.session.fbOAuthUserId;
+  // Verify state JWT — no session needed
+  let decoded;
+  try {
+    decoded = jwt.verify(state, process.env.JWT_SECRET);
+  } catch (jwtErr) {
+    logger.warn('Facebook OAuth invalid or expired state JWT', {
+      error: jwtErr.message,
+    });
+    return res.redirect(
+      `${process.env.FRONTEND_URL}/dashboard.html?fb_error=state_mismatch`
+    );
+  }
+
+  const userId = decoded.userId;
   if (!userId) {
-    return res.redirect(`${process.env.FRONTEND_URL}/login.html?error=session_expired`);
+    return res.redirect(
+      `${process.env.FRONTEND_URL}/login.html?error=session_expired`
+    );
   }
 
   try {
@@ -54,15 +79,19 @@ router.get('/callback', async (req, res) => {
       longTokenData.expires_in
     );
 
-    // Clean up session state
-    delete req.session.fbOAuthState;
-    delete req.session.fbOAuthUserId;
+    logger.info('Facebook connected successfully', {
+      userId,
+      pages: pages.length,
+    });
 
-    logger.info('Facebook connected successfully', { userId, pages: pages.length });
-    res.redirect(`${process.env.FRONTEND_URL}/dashboard.html?fb_connected=${pages.length}`);
+    res.redirect(
+      `${process.env.FRONTEND_URL}/dashboard.html?fb_connected=${pages.length}`
+    );
   } catch (err) {
     logger.error('Facebook OAuth callback error', { error: err.message });
-    res.redirect(`${process.env.FRONTEND_URL}/dashboard.html?fb_error=connection_failed`);
+    res.redirect(
+      `${process.env.FRONTEND_URL}/dashboard.html?fb_error=connection_failed`
+    );
   }
 });
 
@@ -87,10 +116,13 @@ router.get('/pages', requireAuth, async (req, res) => {
 // ── DISCONNECT A PAGE ─────────────────────────────────────
 router.delete('/pages/:pageId', requireAuth, async (req, res) => {
   try {
-    await query(
-      'UPDATE facebook_pages SET is_active = false WHERE id = $1 AND user_id = $2',
+    const result = await query(
+      'UPDATE facebook_pages SET is_active = false WHERE id = $1 AND user_id = $2 RETURNING id',
       [req.params.pageId, req.user.id]
     );
+    if (!result.rows.length) {
+      return res.status(404).json({ error: 'Page not found' });
+    }
     res.json({ message: 'Page disconnected successfully' });
   } catch (err) {
     logger.error('Disconnect page error', { error: err.message });
@@ -104,11 +136,15 @@ router.patch('/pages/:pageId/color', requireAuth, async (req, res) => {
   if (!color || !/^#[0-9A-Fa-f]{6}$/.test(color)) {
     return res.status(400).json({ error: 'Invalid color format' });
   }
-  await query(
-    'UPDATE facebook_pages SET color = $1 WHERE id = $2 AND user_id = $3',
-    [color, req.params.pageId, req.user.id]
-  );
-  res.json({ message: 'Color updated' });
+  try {
+    await query(
+      'UPDATE facebook_pages SET color = $1 WHERE id = $2 AND user_id = $3',
+      [color, req.params.pageId, req.user.id]
+    );
+    res.json({ message: 'Color updated' });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not update color' });
+  }
 });
 
 // ── CHECK TOKEN HEALTH ────────────────────────────────────
@@ -118,12 +154,12 @@ router.get('/pages/:pageId/token-health', requireAuth, async (req, res) => {
       'SELECT page_token_enc, page_token_expires_at FROM facebook_pages WHERE id = $1 AND user_id = $2',
       [req.params.pageId, req.user.id]
     );
-    if (!result.rows.length) return res.status(404).json({ error: 'Page not found' });
-
+    if (!result.rows.length) {
+      return res.status(404).json({ error: 'Page not found' });
+    }
     const page = result.rows[0];
     const token = decrypt(page.page_token_enc);
     const tokenInfo = await fb.debugToken(token);
-
     res.json({
       is_valid: tokenInfo.is_valid,
       expires_at: tokenInfo.expires_at,
