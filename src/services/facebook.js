@@ -63,13 +63,19 @@ async function getFbUserInfo(accessToken) {
 
 // ── GET PAGES MANAGED BY USER ────────────────────────────
 async function getManagedPages(userAccessToken) {
-  const res = await axios.get(`${GRAPH_BASE}/me/accounts`, {
-    params: {
-      fields: 'id,name,category,fan_count,picture,access_token,tasks',
-      access_token: userAccessToken,
-    },
-  });
-  return res.data.data || [];
+  let allPages = [];
+  let url = `${GRAPH_BASE}/me/accounts?fields=id,name,category,fan_count,picture,access_token,tasks&limit=100&access_token=${userAccessToken}`;
+
+  // Loop through all pages of results
+  while (url) {
+    const res = await axios.get(url);
+    const data = res.data;
+    allPages = allPages.concat(data.data || []);
+    // Check if there are more pages
+    url = data.paging?.next || null;
+  }
+
+  return allPages;
 }
 
 // ── SAVE FB CONNECTION TO DATABASE ───────────────────────
